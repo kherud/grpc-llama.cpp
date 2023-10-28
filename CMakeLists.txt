@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 
+set(TARGET grpc-server)
+
 project("grpc-llama.cpp" C CXX)
 
 include(common.cmake)
@@ -21,7 +23,8 @@ add_custom_command(
         -I "${llm_proto_path}"
         --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
         "${llm_proto}"
-      DEPENDS "${llm_proto}")
+      DEPENDS "${llm_proto}"
+)
 
 # Include generated *.pb.h files
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
@@ -32,19 +35,30 @@ add_library(llm_grpc_proto
   ${llm_grpc_srcs}
   ${llm_grpc_hdrs}
   ${llm_proto_srcs}
-  ${llm_proto_hdrs})
+  ${llm_proto_hdrs}
+)
 target_link_libraries(llm_grpc_proto
   ${_REFLECTION}
   ${_GRPC_GRPCPP}
-  ${_PROTOBUF_LIBPROTOBUF})
+  ${_PROTOBUF_LIBPROTOBUF}
+)
 
-add_executable(server "llm_server.cc")
-target_link_libraries(server
+add_executable(${TARGET} server.cpp)
+target_include_directories(${TARGET} PRIVATE
+	third_party/llama.cpp/examples/llava
+	third_party/llama.cpp/examples/server
+)
+target_link_libraries(${TARGET} PRIVATE
     llm_grpc_proto
     common
     llama
+    clip
     ${_REFLECTION}
     ${_GRPC_GRPCPP}
     ${_PROTOBUF_LIBPROTOBUF}
+    ${CMAKE_THREAD_LIBS_INIT}
 )
-target_compile_features(server PRIVATE cxx_std_11)
+target_compile_features(${TARGET} PRIVATE cxx_std_11)
+target_compile_definitions(${TARGET} PRIVATE
+    SERVER_VERBOSE=$<BOOL:${LLAMA_SERVER_VERBOSE}>
+)
