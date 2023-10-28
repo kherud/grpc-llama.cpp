@@ -1,0 +1,183 @@
+/**
+The definition of a RPC LLM service implementing the functionality needed by the code completion plugin.
+ */
+
+syntax = "proto3";
+
+package de.kherud.grpc.llm;
+
+import "google/protobuf/empty.proto";
+
+option java_multiple_files = true;
+option optimize_for = SPEED;
+
+service LLM {
+
+  /**
+  Performs a health check of the service
+   */
+  rpc status(google.protobuf.Empty) returns (GetStatusReply);
+
+  /**
+  Calculates an embedding for a given string
+   */
+  rpc embed(EmbedRequest) returns (EmbedReply);
+
+  /**
+  Returns the probabilities for a given text
+   */
+  rpc probabilities(ProbabilitiesRequest) returns (ProbabilitiesReply);
+
+  /**
+  Calculates and returns a whole response
+   */
+  rpc complete(CompleteRequest) returns (CompleteReply);
+
+  /**
+  Streams generating a response and returns probabilities for each token
+   */
+  rpc generate(GenerateRequest) returns (stream GenerateReply);
+
+  /**
+  Tokenizes a given text, returning a list of tokens for a string
+   */
+  rpc encode(EncodeRequest) returns (EncodeReply);
+
+  /**
+  De-tokenizes a given list of tokens, returning a resulting string
+   */
+  rpc decode(DecodeRequest) returns (DecodeReply);
+
+}
+
+message GetStatusReply {
+  bool available = 1;
+  optional ModelParameters parameters = 2;
+}
+
+message EmbedRequest {
+  oneof prompt {
+    ChatPrompt chat = 1;
+    InfillPrompt infill = 2;
+  }
+}
+message EmbedReply {
+  repeated float embedding = 1;
+}
+
+message ProbabilitiesRequest {
+  oneof prompt {
+    ChatPrompt chat = 1;
+    InfillPrompt infill = 2;
+  }
+}
+message ProbabilitiesReply {
+  repeated float probability = 1;
+}
+
+message CompleteRequest {
+  oneof prompt {
+    ChatPrompt chat = 1;
+    InfillPrompt infill = 2;
+  }
+  optional InferenceParameters parameters = 3;
+}
+message CompleteReply {
+  string response = 1;
+}
+
+message GenerateRequest {
+  oneof prompt {
+    ChatPrompt chat = 1;
+    InfillPrompt infill = 2;
+  }
+  optional InferenceParameters parameters = 3;
+}
+message GenerateReply {
+  string token = 1;
+}
+
+message EncodeRequest {
+  string text = 1;
+}
+message EncodeReply {
+  repeated uint32 token = 1;
+}
+
+message DecodeRequest {
+  repeated uint32 token = 1;
+}
+message DecodeReply {
+  string text = 1;
+}
+
+message ChatPrompt {
+  string prompt = 1;
+}
+message InfillPrompt {
+  string prefix = 1;
+  string suffix = 2;
+}
+
+message InferenceParameters {
+  optional bool cachePrompt       = 1; // remember the prompt to avoid reprocessing all prompt
+
+  optional uint32 seed            = 2; // RNG seed
+  optional int32  nKeep           = 3; // number of tokens to keep from initial prompt
+  optional int32  nPredict        = 4; // new tokens to predict
+
+  optional int32 nPrev            = 5; // number of previous tokens to remember
+  optional int32 nProbs           = 6; // if greater than 0, output the probabilities of top n_probs tokens.
+  optional int32 topK             = 7; // <= 0 to use vocab size
+  optional float topP             = 8; // 1.0 = disabled
+  optional float tfsZ             = 9; // 1.0 = disabled
+  optional float typicalP         = 10; // 1.0 = disabled
+  optional float temp             = 11; // 1.0 = disabled
+  optional int32 penaltyLastN     = 12; // last n tokens to penalize (0 = disable penalty, -1 = context size)
+  optional float penaltyRepeat    = 13; // 1.0 = disabled
+  optional float penaltyFreq      = 14; // 0.0 = disabled
+  optional float penaltyPresent   = 15; // 0.0 = disabled
+  optional int32 mirostat         = 16; // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+  optional float mirostatTau      = 17; // target entropy
+  optional float mirostatEta      = 18; // learning rate
+  optional bool  penalizeNl       = 19; // consider newlines as a repeatable token
+
+  optional string grammar         = 20; // optional BNF-like grammar to constrain sampling
+
+  optional float cfgScale         = 21; // how strong is guidance
+
+  map<int32, float> logitBias     = 22;
+
+  repeated string stopString      = 23;
+}
+
+message ModelParameters {
+  int32 seed           = 1; // RNG seed
+  int32 nCtx           = 2; // context size
+  int32 nBatch         = 3; // batch size for prompt processing (must be >=32 to use BLAS)
+  int32 nDraft         = 5; // number of tokens to draft during speculative decoding
+  int32 nChunks        = 6; // max number of chunks to process (-1 = unlimited)
+  int32 nParallel      = 7; // number of parallel sequences to decode
+  int32 nSequences     = 8; // number of sequences to decode
+  int32 nBeams         = 9; // if non-zero then use beam search of given width.
+  float ropeFreqBase   = 10; // RoPE base frequency
+  float ropeFreqScale  = 11; // RoPE frequency scaling factor
+
+  string model         = 12; // model path
+  string modelDraft    = 13; // draft model for speculative decoding
+  string modelAlias    = 14; // model alias
+
+  // TODO: avoid tuple, use struct
+  message LoraAdapter {
+    string path = 1;
+    float scale = 2;
+  }
+  repeated LoraAdapter adapter = 15; // lora adapter path with user defined scale
+  string loraBase = 16; // base model path for the lora adapter
+
+  bool embedding  = 17; // whether embeddings are supported
+
+  // multimodal models (see examples/llava)
+  string mmproj = 18; // path to multimodal projector
+  string image = 19; // path to an image file
+}
