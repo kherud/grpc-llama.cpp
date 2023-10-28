@@ -28,7 +28,7 @@ PROTOC = protoc
 GRPC_CPP_PLUGIN = grpc_cpp_plugin
 GRPC_CPP_PLUGIN_PATH ?= `which $(GRPC_CPP_PLUGIN)`
 
-PROTOS_PATH = ../proto
+PROTOS_PATH = protos
 
 vpath %.proto $(PROTOS_PATH)
 
