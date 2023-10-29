@@ -24,11 +24,6 @@ service LLM {
   rpc embed(EmbedRequest) returns (EmbedReply);
 
   /**
-  Returns the probabilities for a given text
-   */
-  rpc probabilities(ProbabilitiesRequest) returns (ProbabilitiesReply);
-
-  /**
   Calculates and returns a whole response
    */
   rpc complete(CompleteRequest) returns (CompleteReply);
@@ -56,30 +51,17 @@ message GetStatusReply {
 }
 
 message EmbedRequest {
-  oneof prompt {
-    ChatPrompt chat = 1;
-    InfillPrompt infill = 2;
-  }
+  repeated string text = 1;
 }
 message EmbedReply {
-  repeated float embedding = 1;
+  repeated Embedding embedding = 1;
 }
-
-message ProbabilitiesRequest {
-  oneof prompt {
-    ChatPrompt chat = 1;
-    InfillPrompt infill = 2;
-  }
-}
-message ProbabilitiesReply {
-  repeated float probability = 1;
+message Embedding {
+  repeated float logit = 1;
 }
 
 message CompleteRequest {
-  oneof prompt {
-    ChatPrompt chat = 1;
-    InfillPrompt infill = 2;
-  }
+  Prompt prompt = 1;
   optional InferenceParameters parameters = 3;
 }
 message CompleteReply {
@@ -87,14 +69,11 @@ message CompleteReply {
 }
 
 message GenerateRequest {
-  oneof prompt {
-    ChatPrompt chat = 1;
-    InfillPrompt infill = 2;
-  }
+  Prompt prompt = 1;
   optional InferenceParameters parameters = 3;
 }
 message GenerateReply {
-  string token = 1;
+  string text = 1;
 }
 
 message EncodeRequest {
@@ -111,6 +90,12 @@ message DecodeReply {
   string text = 1;
 }
 
+message Prompt {
+  oneof prompt {
+    ChatPrompt chat = 1;
+    InfillPrompt infill = 2;
+  }
+}
 message ChatPrompt {
   string prompt = 1;
 }
@@ -149,6 +134,8 @@ message InferenceParameters {
   map<int32, float> logitBias     = 22;
 
   repeated string stopString      = 23;
+
+  optional bool ignoreEos         = 24;
 }
 
 message ModelParameters {
@@ -167,7 +154,6 @@ message ModelParameters {
   string modelDraft    = 13; // draft model for speculative decoding
   string modelAlias    = 14; // model alias
 
-  // TODO: avoid tuple, use struct
   message LoraAdapter {
     string path = 1;
     float scale = 2;
