@@ -9,6 +9,7 @@ First install [grpc](https://grpc.io/docs/languages/cpp/quickstart).
 Then run:
 
 ```bash
+git submodule update --init --recursive
 mkdir -p build
 cd build
 cmake -DCMAKE_PREFIX_PATH=/path/to/grpc -DLLAMA_BUILD_EXAMPLES=ON ..  # other build args like -DLLAMA_CUBLAS=ON

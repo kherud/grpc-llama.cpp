@@ -45,5 +45,5 @@ IncludeCategories:
 Language: ObjC
 BasedOnStyle: Google
 ColumnLimit: 100
-ObjCBlockIndentWidth: 2
+ObjCBlockIndentWidth: 4
 ...

@@ -5,6 +5,7 @@ set(TARGET grpc-server)
 project("grpc-llama.cpp" C CXX)
 
 include(common.cmake)
+include(build-args.cmake)
 
 # Proto file
 get_filename_component(llm_proto "protos/llm.proto" ABSOLUTE)
@@ -57,8 +58,17 @@ target_link_libraries(${TARGET} PRIVATE
     ${_GRPC_GRPCPP}
     ${_PROTOBUF_LIBPROTOBUF}
     ${CMAKE_THREAD_LIBS_INIT}
+    ${LLAMA_EXTRA_LIBS}
 )
 target_compile_features(${TARGET} PRIVATE cxx_std_11)
 target_compile_definitions(${TARGET} PRIVATE
     SERVER_VERBOSE=$<BOOL:${LLAMA_SERVER_VERBOSE}>
+)
+
+add_executable(grpc-client client.cpp)
+target_link_libraries(grpc-client PRIVATE
+    llm_grpc_proto
+    ${_REFLECTION}
+    ${_GRPC_GRPCPP}
+    ${_PROTOBUF_LIBPROTOBUF}
 )
