@@ -3,6 +3,7 @@
 #include <mutex>
 #include <chrono>
 #include <fstream>
+#include <regex>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
 
@@ -31,6 +32,7 @@ using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
+using grpc::StatusCode;
 
 struct server_params
 {
@@ -533,11 +535,165 @@ class llama_server_context final : public LLM::Service
         }
     }
 
-    Status generate(ServerContext* context, const GenerateRequest* request, ServerWriter<GenerateReply>* writer)
-	{
+    Status status(ServerContext* context, const Empty* request, GetStatusReply* reply) override
+    {
+        ModelParameters* parameters = new ModelParameters();
+        parameters->set_seed(params.seed);
+		parameters->set_nctx(params.n_ctx);
+		parameters->set_nbatch(params.n_batch);
+		parameters->set_ndraft(params.n_draft);
+		parameters->set_nchunks(params.n_chunks);
+		parameters->set_nparallel(params.n_parallel);
+		parameters->set_nsequences(params.n_sequences);
+		parameters->set_nbeams(params.n_beams);
+		parameters->set_ropefreqbase(params.rope_freq_base);
+		parameters->set_ropefreqscale(params.rope_freq_scale);
+		parameters->set_model(params.model);
+		parameters->set_modeldraft(params.model_draft);
+		parameters->set_modelalias(params.model_alias);
+        parameters->set_lorabase(params.lora_base);
+		parameters->set_embedding(params.embedding);
+		parameters->set_mmproj(params.mmproj);
+		parameters->set_image(params.image);
+
+        for (const auto& [path, scale] : params.lora_adapter) {
+        	ModelParameters_LoraAdapter* adapter = parameters->add_adapter();
+            adapter->set_path(path);
+            adapter->set_scale(scale);
+        }
+
+    	reply->set_available(true);
+        reply->set_allocated_parameters(parameters);
 
 		return Status::OK;
-	}
+    }
+
+    // Calculates an embedding for a given string
+    Status embed(ServerContext* context, const EmbedRequest* request, EmbedReply* response)
+    {
+        json prompt;
+        for (int i = 0; i < request->text_size(); ++i) {
+            prompt.push_back(request->text(i));
+        }
+        const int task_id = request_completion({ {"prompt", prompt}, { "n_predict", 0} }, false);
+        task_result result = next_result(task_id);
+
+        if (result.error) {
+            std::string message = result.result_json["content"];
+            return Status(StatusCode::FAILED_PRECONDITION, message);
+        }
+
+        return Status::OK;
+    }
+
+    // Calculates and returns a whole response
+    Status complete(ServerContext* context, const CompleteRequest* request, CompleteReply* response)
+    {
+        json data = parseParameters(request->prompt(), request->parameters());
+
+        const int task_id = request_completion(data, request->prompt().has_infill());
+        task_result result = next_result(task_id);
+
+        std::string content = result.result_json["content"];
+
+        if (result.error) {
+            return Status(StatusCode::FAILED_PRECONDITION, content);
+        }
+
+        response->set_response(content);
+
+        return Status::OK;
+    }
+
+    // Streams generating a response and returns probabilities for each token
+    Status generate(ServerContext* context, const GenerateRequest* request, ServerWriter<GenerateReply>* writer)
+    {
+        json data = parseParameters(request->prompt(), request->parameters());
+        const int task_id = request_completion(data, request->prompt().has_infill());
+
+        while (!context->IsCancelled())
+        {
+            task_result result = next_result(task_id);
+            std::string message = result.result_json["content"];
+            if (!result.error) {
+                GenerateReply reply;
+                reply.set_text(message);
+                writer->Write(reply);
+                if (result.stop) {
+                    break;
+                }
+            } else {
+                return Status(StatusCode::FAILED_PRECONDITION, message);
+            }
+        }
+
+        return Status::OK;
+    }
+
+    // Tokenizes a given text, returning a list of tokens for a string
+    Status encode(ServerContext* context, const EncodeRequest* request, EncodeReply* response)
+    {
+        return Status::OK;
+    }
+
+    // De-tokenizes a given list of tokens, returning a resulting string
+    Status decode(ServerContext* context, const DecodeRequest* request, DecodeReply* response)
+    {
+        return Status::OK;
+    }
+
+    json parseParameters(Prompt prompt, InferenceParameters grpc_params) {
+        json json_params = json::object();
+        if (prompt.has_chat()) {
+            const auto chat_prompt = prompt.chat();
+            json_params["prompt"] = chat_prompt.prompt();
+        } else if (prompt.has_infill()) {
+            const auto infill_prompt = prompt.infill();
+            json_params["input_prefix"] = infill_prompt.prefix();
+            json_params["input_suffix"] = infill_prompt.suffix();
+        }
+        if (grpc_params.has_cacheprompt()) json_params["cachePrompt"] = grpc_params.cacheprompt();
+        if (grpc_params.has_seed()) json_params["seed"] = grpc_params.seed();
+        if (grpc_params.has_nkeep()) json_params["nKeep"] = grpc_params.nkeep();
+        if (grpc_params.has_npredict()) json_params["nPredict"] = grpc_params.npredict();
+        if (grpc_params.has_nprev()) json_params["nPrev"] = grpc_params.nprev();
+        if (grpc_params.has_nprobs()) json_params["nProbs"] = grpc_params.nprobs();
+        if (grpc_params.has_topk()) json_params["topK"] = grpc_params.topk();
+        if (grpc_params.has_topp()) json_params["topP"] = grpc_params.topp();
+        if (grpc_params.has_tfsz()) json_params["tfsZ"] = grpc_params.tfsz();
+        if (grpc_params.has_typicalp()) json_params["typicalP"] = grpc_params.typicalp();
+        if (grpc_params.has_temp()) json_params["temp"] = grpc_params.temp();
+        if (grpc_params.has_penaltylastn()) json_params["penaltyLastN"] = grpc_params.penaltylastn();
+        if (grpc_params.has_penaltyrepeat()) json_params["penaltyRepeat"] = grpc_params.penaltyrepeat();
+        if (grpc_params.has_penaltyfreq()) json_params["penaltyFreq"] = grpc_params.penaltyfreq();
+        if (grpc_params.has_penaltypresent()) json_params["penaltyPresent"] = grpc_params.penaltypresent();
+        if (grpc_params.has_mirostat()) json_params["mirostat"] = grpc_params.mirostat();
+        if (grpc_params.has_mirostattau()) json_params["mirostatTau"] = grpc_params.mirostattau();
+        if (grpc_params.has_mirostateta()) json_params["mirostatEta"] = grpc_params.mirostateta();
+        if (grpc_params.has_penalizenl()) json_params["penalizeNl"] = grpc_params.penalizenl();
+        if (grpc_params.has_grammar()) json_params["grammar"] = grpc_params.grammar();
+        if (grpc_params.has_cfgscale()) json_params["cfgScale"] = grpc_params.cfgscale();
+        if (grpc_params.has_ignoreeos()) json_params["ignore_eos"] = grpc_params.ignoreeos();
+        if (grpc_params.logitbias_size() > 0) {
+            json logit_bias = json::array();
+            for (const auto& [token, bias] : grpc_params.logitbias()) {
+                json entry = json::array();
+                entry.push_back(token);
+                entry.push_back(bias);
+                logit_bias.push_back(entry);
+            }
+            json_params["logit_bias"] = logit_bias;
+        }
+        if (grpc_params.stopstring_size() > 0) {
+            json stop_strings = json::array();
+            for (int i = 0; i < grpc_params.stopstring_size(); ++i) {
+                stop_strings.push_back(grpc_params.stopstring(i));
+            }
+            json_params["stop"] = stop_strings;
+        }
+        return json_params;
+    }
+
 
     bool load_model(const gpt_params &params_)
     {
@@ -2197,41 +2353,48 @@ int main(int argc, char **argv)
 	ServerBuilder builder;
 	builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 	builder.RegisterService(&llama);
+	std::unique_ptr<Server> server(builder.BuildAndStart());
 
     // set timeouts and change hostname and port
 	// svr.set_read_timeout (sparams.read_timeout);
 	// svr.set_write_timeout(sparams.write_timeout);
 
     // to make it ctrl+clickable:
-    LOG_TEE("\nllama server listening at http://%s:%d\n\n", sparams.hostname.c_str(), sparams.port);
+    LOG_TEE("\nllama server listening at %s:%d\n\n", sparams.hostname.c_str(), sparams.port);
 
-    LOG_INFO("HTTP server listening", {
+    LOG_INFO("GRPC server listening", {
                                           {"hostname", sparams.hostname},
                                           {"port", sparams.port},
                                       });
 
-    // run the HTTP server in a thread - see comment below
-    std::thread t([&]()
-            {
-            	std::unique_ptr<Server> server(builder.BuildAndStart());
-            	server->Wait();
+  	bool running = true;
+	while (running)
+	{
+		running = llama.update_slots();
+	}
 
-                return 0;
-            });
+    // run the HTTP server in a thread - see comment below
+//    std::thread t([&]()
+//            {
+//            	std::unique_ptr<Server> server(builder.BuildAndStart());
+//            	server->Wait();
+//
+//                return 0;
+//            });
 
     // GG: if I put the main loop inside a thread, it crashes on the first request when build in Debug!?
     //     "Bus error: 10" - this is on macOS, it does not crash on Linux
     //std::thread t2([&]()
-    {
-        bool running = true;
-        while (running)
-        {
-            running = llama.update_slots();
-        }
-    }
+//    {
+//        bool running = true;
+//        while (running)
+//        {
+//            running = llama.update_slots();
+//        }
+//    }
     //);
 
-    t.join();
+//    t.join();
 
     llama_backend_free();
     return 0;
