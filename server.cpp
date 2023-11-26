@@ -590,7 +590,7 @@ class llama_server_context final : public LLM::Service
     // Calculates and returns a whole response
     Status complete(ServerContext* context, const CompleteRequest* request, CompleteReply* response)
     {
-        json data = parseParameters(request->prompt(), request->parameters());
+        json data = parseParameters(request->prompt(), request->parameters(), false);
 
         const int task_id = request_completion(data, request->prompt().has_infill(), false);
         task_result result = next_result(task_id);
@@ -609,7 +609,7 @@ class llama_server_context final : public LLM::Service
     // Streams generating a response and returns probabilities for each token
     Status generate(ServerContext* context, const GenerateRequest* request, ServerWriter<GenerateReply>* writer)
     {
-        json data = parseParameters(request->prompt(), request->parameters());
+        json data = parseParameters(request->prompt(), request->parameters(), true);
         const int task_id = request_completion(data, request->prompt().has_infill(), false);
 
         while (!context->IsCancelled())
@@ -643,7 +643,7 @@ class llama_server_context final : public LLM::Service
         return Status::OK;
     }
 
-    json parseParameters(Prompt prompt, InferenceParameters grpc_params) {
+    json parseParameters(Prompt prompt, InferenceParameters grpc_params, bool stream) {
         json json_params = json::object();
         if (prompt.has_chat()) {
             const auto chat_prompt = prompt.chat();
@@ -653,6 +653,7 @@ class llama_server_context final : public LLM::Service
             json_params["input_prefix"] = infill_prompt.prefix();
             json_params["input_suffix"] = infill_prompt.suffix();
         }
+        json_params["stream"] = stream;
         if (grpc_params.has_cacheprompt()) json_params["cachePrompt"] = grpc_params.cacheprompt();
         if (grpc_params.has_seed()) json_params["seed"] = grpc_params.seed();
         if (grpc_params.has_nkeep()) json_params["nKeep"] = grpc_params.nkeep();
