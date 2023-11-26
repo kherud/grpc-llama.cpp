@@ -1,11 +1,35 @@
-cmake_minimum_required(VERSION 3.13)
-
-set(TARGET grpc-server)
+cmake_minimum_required(VERSION 3.25)
 
 project("grpc-llama.cpp" C CXX)
 
-include(common.cmake)
+set(TARGET grpc-server)
+set(GRPC_TAG v1.59.3)
+set(LLAMA_CPP_TAG b1566)
+set(NLOHMANN_JSON_TAG v3.11.2)
+
+include(FetchContent)
 include(build-args.cmake)
+
+find_package(Threads REQUIRED)
+
+#################### GRPC ####################
+
+set(ABSL_ENABLE_INSTALL ON)
+FetchContent_Declare(
+	grpc
+	GIT_REPOSITORY https://github.com/grpc/grpc.git
+	GIT_TAG        ${GRPC_TAG}
+)
+FetchContent_MakeAvailable(grpc)
+set(_PROTOBUF_LIBPROTOBUF libprotobuf)
+set(_REFLECTION grpc++_reflection)
+set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)
+set(_GRPC_GRPCPP grpc++)
+if(CMAKE_CROSSCOMPILING)
+	find_program(_GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
+else()
+	set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+endif()
 
 # Proto file
 get_filename_component(llm_proto "protos/llm.proto" ABSOLUTE)
@@ -29,8 +53,8 @@ add_custom_command(
 
 # Include generated *.pb.h files
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
-add_subdirectory(third_party/llama.cpp)
-add_subdirectory(third_party/llama.cpp/examples/llava)
+#add_subdirectory(third_party/llama.cpp)
+#add_subdirectory(third_party/llama.cpp/examples/llava)
 
 # llm_grpc_proto
 add_library(llm_grpc_proto
@@ -45,16 +69,34 @@ target_link_libraries(llm_grpc_proto
   ${_PROTOBUF_LIBPROTOBUF}
 )
 
-add_executable(${TARGET} server.cpp)
-target_include_directories(${TARGET} PRIVATE
-	third_party/llama.cpp/examples/llava
-	third_party/llama.cpp/examples/server
+#################### json ####################
+
+FetchContent_Declare(
+	json
+	GIT_REPOSITORY https://github.com/nlohmann/json
+	GIT_TAG        ${NLOHMANN_JSON_TAG}
 )
+FetchContent_MakeAvailable(json)
+
+#################### llama.cpp ####################
+
+set(LLAMA_BUILD_EXAMPLES ON)
+FetchContent_Declare(
+	llama.cpp
+	GIT_REPOSITORY https://github.com/ggerganov/llama.cpp
+	GIT_TAG        ${LLAMA_CPP_TAG}
+)
+FetchContent_MakeAvailable(llama.cpp)
+
+#################### grpc-llama.cpp ####################
+
+add_executable(${TARGET} server.cpp)
 target_link_libraries(${TARGET} PRIVATE
     llm_grpc_proto
     common
     llama
     llava
+    nlohmann_json
     ${_REFLECTION}
     ${_GRPC_GRPCPP}
     ${_PROTOBUF_LIBPROTOBUF}
