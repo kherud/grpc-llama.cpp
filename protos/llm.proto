@@ -115,27 +115,28 @@ message InferenceParameters {
   optional int32 nProbs           = 6; // if greater than 0, output the probabilities of top n_probs tokens.
   optional int32 topK             = 7; // <= 0 to use vocab size
   optional float topP             = 8; // 1.0 = disabled
-  optional float tfsZ             = 9; // 1.0 = disabled
-  optional float typicalP         = 10; // 1.0 = disabled
-  optional float temp             = 11; // 1.0 = disabled
-  optional int32 penaltyLastN     = 12; // last n tokens to penalize (0 = disable penalty, -1 = context size)
-  optional float penaltyRepeat    = 13; // 1.0 = disabled
-  optional float penaltyFreq      = 14; // 0.0 = disabled
-  optional float penaltyPresent   = 15; // 0.0 = disabled
-  optional int32 mirostat         = 16; // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
-  optional float mirostatTau      = 17; // target entropy
-  optional float mirostatEta      = 18; // learning rate
-  optional bool  penalizeNl       = 19; // consider newlines as a repeatable token
+  optional float minP             = 9;
+  optional float tfsZ             = 10; // 1.0 = disabled
+  optional float typicalP         = 11; // 1.0 = disabled
+  optional float temp             = 12; // 1.0 = disabled
+  optional int32 penaltyLastN     = 13; // last n tokens to penalize (0 = disable penalty, -1 = context size)
+  optional float penaltyRepeat    = 14; // 1.0 = disabled
+  optional float penaltyFreq      = 15; // 0.0 = disabled
+  optional float penaltyPresent   = 16; // 0.0 = disabled
+  optional int32 mirostat         = 17; // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+  optional float mirostatTau      = 18; // target entropy
+  optional float mirostatEta      = 19; // learning rate
+  optional bool  penalizeNl       = 20; // consider newlines as a repeatable token
 
-  optional string grammar         = 20; // optional BNF-like grammar to constrain sampling
+  optional string grammar         = 21; // optional BNF-like grammar to constrain sampling
 
-  optional float cfgScale         = 21; // how strong is guidance
+  optional float cfgScale         = 22; // how strong is guidance
 
-  map<int32, float> logitBias     = 22;
+  map<int32, float> logitBias     = 23;
 
-  repeated string stopString      = 23;
+  repeated string stopString      = 24;
 
-  optional bool ignoreEos         = 24;
+  optional bool ignoreEos         = 25;
 }
 
 message ModelParameters {

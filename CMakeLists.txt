@@ -30,6 +30,7 @@ add_custom_command(
 # Include generated *.pb.h files
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 add_subdirectory(third_party/llama.cpp)
+add_subdirectory(third_party/llama.cpp/examples/llava)
 
 # llm_grpc_proto
 add_library(llm_grpc_proto
@@ -53,7 +54,7 @@ target_link_libraries(${TARGET} PRIVATE
     llm_grpc_proto
     common
     llama
-    clip
+    llava
     ${_REFLECTION}
     ${_GRPC_GRPCPP}
     ${_PROTOBUF_LIBPROTOBUF}

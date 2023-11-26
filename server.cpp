@@ -11,7 +11,6 @@
 
 #include "common.h"
 #include "llama.h"
-#include "build-info.h"
 #include "grammar-parser.h"
 
 #include "clip.h"
@@ -148,6 +147,7 @@ struct task_server {
     task_type type;
     json data;
     bool infill_mode = false;
+    bool embedding_mode = false;
 };
 
 struct task_result {
@@ -370,6 +370,7 @@ struct llama_client_slot
     std::vector<completion_token_output> generated_token_probs;
 
     bool infill = false;
+    bool embedding = false;
     bool has_next_token = true;
     bool truncated = false;
     bool stopped_eos = false;
@@ -500,6 +501,7 @@ class llama_server_context final : public LLM::Service
     bool multimodal         = false;
     bool clean_kv_cache     = true;
     bool all_slots_are_idle = false;
+    bool add_bos_token      = true;
 
     int32_t id_gen;
     int32_t n_ctx;  // total context for all clients / slots
@@ -569,13 +571,13 @@ class llama_server_context final : public LLM::Service
     }
 
     // Calculates an embedding for a given string
-    Status embed(ServerContext* context, const EmbedRequest* request, EmbedReply* response)
+    Status embed(ServerContext* context, const EmbedRequest* request, EmbedReply* response) override
     {
         json prompt;
         for (int i = 0; i < request->text_size(); ++i) {
             prompt.push_back(request->text(i));
         }
-        const int task_id = request_completion({ {"prompt", prompt}, { "n_predict", 0} }, false);
+        const int task_id = request_completion({ {"prompt", prompt}, { "n_predict", 0} }, false, true);
         task_result result = next_result(task_id);
 
         if (result.error) {
@@ -591,7 +593,7 @@ class llama_server_context final : public LLM::Service
     {
         json data = parseParameters(request->prompt(), request->parameters());
 
-        const int task_id = request_completion(data, request->prompt().has_infill());
+        const int task_id = request_completion(data, request->prompt().has_infill(), false);
         task_result result = next_result(task_id);
 
         std::string content = result.result_json["content"];
@@ -609,7 +611,7 @@ class llama_server_context final : public LLM::Service
     Status generate(ServerContext* context, const GenerateRequest* request, ServerWriter<GenerateReply>* writer)
     {
         json data = parseParameters(request->prompt(), request->parameters());
-        const int task_id = request_completion(data, request->prompt().has_infill());
+        const int task_id = request_completion(data, request->prompt().has_infill(), false);
 
         while (!context->IsCancelled())
         {
@@ -631,13 +633,13 @@ class llama_server_context final : public LLM::Service
     }
 
     // Tokenizes a given text, returning a list of tokens for a string
-    Status encode(ServerContext* context, const EncodeRequest* request, EncodeReply* response)
+    Status encode(ServerContext* context, const EncodeRequest* request, EncodeReply* response) override
     {
         return Status::OK;
     }
 
     // De-tokenizes a given list of tokens, returning a resulting string
-    Status decode(ServerContext* context, const DecodeRequest* request, DecodeReply* response)
+    Status decode(ServerContext* context, const DecodeRequest* request, DecodeReply* response) override
     {
         return Status::OK;
     }
@@ -694,8 +696,7 @@ class llama_server_context final : public LLM::Service
         return json_params;
     }
 
-
-    bool load_model(const gpt_params &params_)
+bool load_model(const gpt_params &params_)
     {
         params = params_;
         if (!params.mmproj.empty()) {
@@ -731,6 +732,8 @@ class llama_server_context final : public LLM::Service
         }
 
         n_ctx = llama_n_ctx(ctx);
+
+        add_bos_token = llama_should_add_bos_token(model);
 
         return true;
     }
@@ -838,6 +841,7 @@ class llama_server_context final : public LLM::Service
         slot->params.n_predict        = json_value(data, "n_predict",         default_params.n_predict);
         slot->sparams.top_k           = json_value(data, "top_k",             default_sparams.top_k);
         slot->sparams.top_p           = json_value(data, "top_p",             default_sparams.top_p);
+        slot->sparams.min_p           = json_value(data, "min_p",             default_sparams.min_p);
         slot->sparams.tfs_z           = json_value(data, "tfs_z",             default_sparams.tfs_z);
         slot->sparams.typical_p       = json_value(data, "typical_p",         default_sparams.typical_p);
         slot->sparams.temp            = json_value(data, "temperature",       default_sparams.temp);
@@ -1017,12 +1021,12 @@ class llama_server_context final : public LLM::Service
 
     void kv_cache_clear() {
         // clear the entire KV cache
-        llama_kv_cache_tokens_rm(ctx, -1, -1);
+        llama_kv_cache_clear(ctx);
         clean_kv_cache = false;
     }
 
     void update_system_prompt() {
-        system_tokens = ::llama_tokenize(ctx, system_prompt, true);
+        system_tokens = ::llama_tokenize(ctx, system_prompt, add_bos_token);
 
         llama_batch_clear(batch);
 
@@ -1250,6 +1254,7 @@ class llama_server_context final : public LLM::Service
         std::lock_guard<std::mutex> lock(mutex_results);
         task_result res;
         res.id = id;
+        res.stop = false;
         res.error = true;
         res.result_json = { { "content", error } };
         queue_results.push_back(res);
@@ -1272,6 +1277,7 @@ class llama_server_context final : public LLM::Service
             {"temp",              slot.sparams.temp},
             {"top_k",             slot.sparams.top_k},
             {"top_p",             slot.sparams.top_p},
+            {"min_p",             slot.sparams.min_p},
             {"tfs_z",             slot.sparams.tfs_z},
             {"typical_p",         slot.sparams.typical_p},
             {"repeat_last_n",     slot.sparams.penalty_last_n},
@@ -1404,13 +1410,15 @@ class llama_server_context final : public LLM::Service
         queue_results.push_back(res);
     }
 
-    int request_completion(json data, bool infill)
+    int request_completion(json data, bool infill, bool embedding)
     {
         std::lock_guard<std::mutex> lock(mutex_tasks);
         task_server task;
         task.id = id_gen++;
+        task.target_id = 0;
         task.data = data;
         task.infill_mode = infill;
+        task.embedding_mode = embedding;
         task.type = COMPLETION_TASK;
         queue_tasks.push_back(task);
         return task.id;
@@ -1536,7 +1544,7 @@ class llama_server_context final : public LLM::Service
                     {
                         LOG_TEE("slot unavailable\n");
                         // send error result
-                        send_error(task.id, "slot unavaliable");
+                        send_error(task.id, "slot unavailable");
                         return;
                     }
 
@@ -1548,6 +1556,7 @@ class llama_server_context final : public LLM::Service
                     slot->reset();
 
                     slot->infill = task.infill_mode;
+                    slot->embedding = task.embedding_mode;
                     slot->task_id = task.id;
 
                     if (!launch_slot_with_data(slot, task.data))
@@ -1707,10 +1716,39 @@ class llama_server_context final : public LLM::Service
                     }
                     else
                     {
-                        prompt_tokens = tokenize(slot.prompt, system_prompt.empty());  // add BOS if there isn't system prompt
+                        prompt_tokens = tokenize(slot.prompt, system_prompt.empty() && add_bos_token);  // add BOS if there isn't system prompt
                     }
 
                     slot.num_prompt_tokens = prompt_tokens.size();
+
+                    if (slot.params.n_keep < 0)
+                    {
+                        slot.params.n_keep = slot.num_prompt_tokens;
+                    }
+                    slot.params.n_keep = std::min(slot.n_ctx - 4, slot.params.n_keep);
+
+                    // if input prompt is too big, truncate it
+                    if (slot.num_prompt_tokens >= slot.n_ctx)
+                    {
+                        const int n_left = slot.n_ctx - slot.params.n_keep;
+                        const int n_block_size = n_left / 2;
+                        const int erased_blocks = (slot.num_prompt_tokens - slot.params.n_keep - n_block_size) / n_block_size;
+
+                        std::vector<llama_token> new_tokens(prompt_tokens.begin(), prompt_tokens.begin() + slot.params.n_keep);
+                        new_tokens.insert(new_tokens.end(), prompt_tokens.begin() + slot.params.n_keep + erased_blocks * n_block_size, prompt_tokens.end());
+
+                        LOG_VERBOSE("input truncated", {
+                            {"n_ctx",  slot.n_ctx},
+                            {"n_keep", slot.params.n_keep},
+                            {"n_left", n_left},
+                            {"new_tokens", tokens_to_str(ctx, new_tokens.cbegin(), new_tokens.cend())},
+                        });
+                        slot.truncated = true;
+                        prompt_tokens = new_tokens;
+
+                        slot.num_prompt_tokens = prompt_tokens.size();
+                        GGML_ASSERT(slot.num_prompt_tokens < slot.n_ctx);
+                    }
 
                     if (!slot.params.cache_prompt)
                     {
@@ -1721,35 +1759,6 @@ class llama_server_context final : public LLM::Service
                     }
                     else
                     {
-                        if (slot.params.n_keep < 0)
-                        {
-                            slot.params.n_keep = slot.num_prompt_tokens;
-                        }
-                        slot.params.n_keep = std::min(slot.n_ctx - 4, slot.params.n_keep);
-
-                        // if input prompt is too big, truncate it
-                        if (slot.num_prompt_tokens >= slot.n_ctx)
-                        {
-                            const int n_left = slot.n_ctx - slot.params.n_keep;
-                            const int n_block_size = n_left / 2;
-                            const int erased_blocks = (slot.num_prompt_tokens - slot.params.n_keep - n_block_size) / n_block_size;
-
-                            std::vector<llama_token> new_tokens(prompt_tokens.begin(), prompt_tokens.begin() + slot.params.n_keep);
-                            new_tokens.insert(new_tokens.end(), prompt_tokens.begin() + slot.params.n_keep + erased_blocks * n_block_size, prompt_tokens.end());
-
-                            LOG_VERBOSE("input truncated", {
-                                                            {"n_ctx",  slot.n_ctx},
-                                                            {"n_keep", slot.params.n_keep},
-                                                            {"n_left", n_left},
-                                                            {"new_tokens", tokens_to_str(ctx, new_tokens.cbegin(), new_tokens.cend())},
-                                                        });
-                            slot.truncated = true;
-                            prompt_tokens = new_tokens;
-
-                            slot.num_prompt_tokens = prompt_tokens.size();
-                            GGML_ASSERT(slot.num_prompt_tokens < slot.n_ctx);
-                        }
-
                         // push the prompt into the sampling context (do not apply grammar)
                         for (auto &token : prompt_tokens)
                         {
@@ -1784,7 +1793,7 @@ class llama_server_context final : public LLM::Service
                     const bool has_images = process_images(slot);
 
                     // process the prefix of first image
-                    std::vector<llama_token> prefix_tokens = has_images ? tokenize(slot.images[0].prefix_prompt, true) : prompt_tokens;
+                    std::vector<llama_token> prefix_tokens = has_images ? tokenize(slot.images[0].prefix_prompt, add_bos_token) : prompt_tokens;
                     for (; slot.n_past < (int) prefix_tokens.size(); ++slot.n_past)
                     {
                        llama_batch_add(batch, prefix_tokens[slot.n_past], system_tokens.size() + slot.n_past, { slot.id }, false);
@@ -1855,7 +1864,7 @@ class llama_server_context final : public LLM::Service
                 }
 
                 // prompt evaluated for embedding
-                if (params.embedding)
+                if (slot.embedding)
                 {
                     send_embedding(slot);
                     slot.release();
@@ -1911,12 +1920,18 @@ static void server_print_usage(const char *argv0, const gpt_params &params,
     printf("options:\n");
     printf("  -h, --help                show this help message and exit\n");
     printf("  -v, --verbose             verbose output (default: %s)\n", server_verbose ? "enabled" : "disabled");
-    printf("  -t N,  --threads N        number of threads to use during computation (default: %d)\n", params.n_threads);
+    printf("  -t N, --threads N         number of threads to use during computation (default: %d)\n", params.n_threads);
     printf("  -tb N, --threads-batch N  number of threads to use during batch and prompt processing (default: same as --threads)\n");
-    printf("  -c N,  --ctx-size N       size of the prompt context (default: %d)\n", params.n_ctx);
+    printf("  -c N, --ctx-size N        size of the prompt context (default: %d)\n", params.n_ctx);
+    printf("  --rope-scaling {none,linear,yarn}\n");
+    printf("                            RoPE frequency scaling method, defaults to linear unless specified by the model\n");
     printf("  --rope-freq-base N        RoPE base frequency (default: loaded from model)\n");
-    printf("  --rope-freq-scale N       RoPE frequency scaling factor (default: loaded from model)\n");
-    printf("  -b N,  --batch-size N     batch size for prompt processing (default: %d)\n", params.n_batch);
+    printf("  --rope-freq-scale N       RoPE frequency scaling factor, expands context by a factor of 1/N\n");
+    printf("  --yarn-ext-factor N       YaRN: extrapolation mix factor (default: 1.0, 0.0 = full interpolation)\n");
+    printf("  --yarn-attn-factor N      YaRN: scale sqrt(t) or attention magnitude (default: 1.0)\n");
+    printf("  --yarn-beta-slow N        YaRN: high correction dim or alpha (default: %.1f)\n", params.yarn_beta_slow);
+    printf("  --yarn-beta-fast N        YaRN: low correction dim or beta (default: %.1f)\n", params.yarn_beta_fast);
+    printf("  -b N, --batch-size N      batch size for prompt processing (default: %d)\n", params.n_batch);
     printf("  --memory-f32              use f32 instead of f16 for memory key+value (default: disabled)\n");
     printf("                            not recommended: doubles context memory required and no measurable increase in quality\n");
     if (llama_mlock_supported())
@@ -2016,6 +2031,19 @@ static void server_params_parse(int argc, char **argv, server_params &sparams,
             }
             params.n_ctx = std::stoi(argv[i]);
         }
+        else if (arg == "--rope-scaling")
+        {
+            if (++i >= argc)
+            {
+                invalid_param = true;
+                break;
+            }
+            std::string value(argv[i]);
+            /**/ if (value == "none")   { params.rope_scaling_type = LLAMA_ROPE_SCALING_NONE; }
+            else if (value == "linear") { params.rope_scaling_type = LLAMA_ROPE_SCALING_LINEAR; }
+            else if (value == "yarn")   { params.rope_scaling_type = LLAMA_ROPE_SCALING_YARN; }
+            else { invalid_param = true; break; }
+        }
         else if (arg == "--rope-freq-base")
         {
             if (++i >= argc)
@@ -2033,6 +2061,38 @@ static void server_params_parse(int argc, char **argv, server_params &sparams,
                 break;
             }
             params.rope_freq_scale = std::stof(argv[i]);
+        }
+        else if (arg == "--yarn-ext-factor")
+        {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.yarn_ext_factor = std::stof(argv[i]);
+        }
+        else if (arg == "--yarn-attn-factor")
+        {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.yarn_attn_factor = std::stof(argv[i]);
+        }
+        else if (arg == "--yarn-beta-fast")
+        {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.yarn_beta_fast = std::stof(argv[i]);
+        }
+        else if (arg == "--yarn-beta-slow")
+        {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.yarn_beta_slow = std::stof(argv[i]);
         }
         else if (arg == "--memory-f32" || arg == "--memory_f32")
         {
@@ -2279,14 +2339,12 @@ static json format_partial_response(
 
 static json format_tokenizer_response(const std::vector<llama_token> &tokens)
 {
-    return json{
-        {"tokens", tokens}};
+    return json{{"tokens", tokens}};
 }
 
 static json format_detokenized_response(std::string content)
 {
-    return json{
-        {"content", content}};
+    return json{{"content", content}};
 }
 
 struct token_translator
@@ -2329,9 +2387,6 @@ int main(int argc, char **argv)
     }
 
     llama_backend_init(params.numa);
-
-    LOG_INFO("build info", {{"build", BUILD_NUMBER},
-                            {"commit", BUILD_COMMIT}});
 
     LOG_INFO("system info", {
                                 {"n_threads", params.n_threads},
