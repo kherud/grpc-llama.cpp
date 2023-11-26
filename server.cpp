@@ -16,7 +16,7 @@
 #include "clip.h"
 #include "stb_image.h"
 
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 
 #ifndef SERVER_VERBOSE
@@ -25,7 +25,6 @@
 
 using namespace de::kherud::grpc::llm;
 using json = nlohmann::json;
-using google::protobuf::Empty;
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
@@ -537,7 +536,7 @@ class llama_server_context final : public LLM::Service
         }
     }
 
-    Status status(ServerContext* context, const Empty* request, GetStatusReply* reply) override
+    Status status(ServerContext* context, const GetStatusRequest* request, GetStatusReply* reply) override
     {
         ModelParameters* parameters = new ModelParameters();
         parameters->set_seed(params.seed);
@@ -662,6 +661,7 @@ class llama_server_context final : public LLM::Service
         if (grpc_params.has_nprobs()) json_params["nProbs"] = grpc_params.nprobs();
         if (grpc_params.has_topk()) json_params["topK"] = grpc_params.topk();
         if (grpc_params.has_topp()) json_params["topP"] = grpc_params.topp();
+        if (grpc_params.has_minp()) json_params["minP"] = grpc_params.minp();
         if (grpc_params.has_tfsz()) json_params["tfsZ"] = grpc_params.tfsz();
         if (grpc_params.has_typicalp()) json_params["typicalP"] = grpc_params.typicalp();
         if (grpc_params.has_temp()) json_params["temp"] = grpc_params.temp();

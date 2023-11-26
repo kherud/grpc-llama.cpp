@@ -10,7 +10,6 @@ using namespace de::kherud::grpc::llm;
 using grpc::Channel;
 using grpc::ClientContext;
 using grpc::Status;
-using google::protobuf::Empty;
 
 class LLMClient {
   public:
@@ -21,7 +20,7 @@ class LLMClient {
     // from the server.
     void status() {
         // Data we are sending to the server.
-        Empty request;
+        GetStatusRequest request;
 
         // Container for the data we expect from the server.
         GetStatusReply reply;

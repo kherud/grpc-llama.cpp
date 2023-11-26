@@ -6,8 +6,6 @@ syntax = "proto3";
 
 package de.kherud.grpc.llm;
 
-import "google/protobuf/empty.proto";
-
 option java_multiple_files = true;
 option optimize_for = SPEED;
 
@@ -16,7 +14,7 @@ service LLM {
   /**
   Performs a health check of the service
    */
-  rpc status(google.protobuf.Empty) returns (GetStatusReply);
+  rpc status(GetStatusRequest) returns (GetStatusReply);
 
   /**
   Calculates an embedding for a given string
@@ -45,6 +43,9 @@ service LLM {
 
 }
 
+message GetStatusRequest {
+
+}
 message GetStatusReply {
   bool available = 1;
   optional ModelParameters parameters = 2;
