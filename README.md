@@ -5,9 +5,6 @@ This repository provides a gRPC server for the library and proto files for clien
 
 ## Installation
 
-First install [grpc](https://grpc.io/docs/languages/cpp/quickstart).
-Then run:
-
 ```bash
 mkdir -p build
 cd build
